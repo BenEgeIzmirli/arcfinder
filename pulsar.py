@@ -5,7 +5,13 @@ import numpy as np
 import os
 import sys
 import multiprocessing as mp
+from multiprocessing_helper_functions import *
 
+# Returns a sorted list of all files in the given directory.
+# Takes:
+#    a directory name
+# Returns:
+#    all files in that directory
 def get_file_list(d):
     files = []
     
@@ -17,7 +23,13 @@ def get_file_list(d):
                 
     return sorted(files)
 
-
+# Shows an image with the given X and Y axes.
+# Takes:
+#    showme - the 2D array to be shown.
+#    axis_y - a 1D array containing the y axis to be used in the plot.
+#    axis_x - a 1D array containing the x axis to be used in the plot.
+# Returns:
+#    Plots the image, returns nothing. Note the show() call must be made manually.
 def show_image(showme, axis_y=None, axis_x=None):
     if axis_x is None:
         axis_x = [i for i in range(len(showme[0]))]
@@ -30,6 +42,14 @@ def show_image(showme, axis_y=None, axis_x=None):
     plt.colorbar()
     return
 
+# plots the given secondary spectrum overplotted with parabolas
+# Takes:
+#    sec - the secondary spectrum object to be plotted
+#    a - a list of curvature (eta) values to be used for the parabolas plotted.
+#        the parabolas will all have vertices at the origin.
+# Returns:
+#    Plots the secondary spectrum with overplotted parabolas, returns nothing.
+#    Note that the show() call must be made manually.
 def overplot_parabola(sec, a, hand=None):
     
     axis_x = sec.get_x_axis()
@@ -65,157 +85,79 @@ def overplot_parabola(sec, a, hand=None):
         plt.plot(axis_x[:int(len(axis_x)/2)], left_parab[i], 'b-')
         plt.plot(axis_x[int(len(axis_x)/2):], right_parab[i], 'b-')
 
-def gaussian(x, mu, sig):
-    return np.exp(-(x - mu)**2 / (2. * sig**2))
+# returns a numpy array containing the dynamic spectrum.
+# Takes:
+#    filename - the filename of the dynamic spectrum
+#    normalize_frequency - if set to True, then will normalize the dynamic spectrum
+#        to compensate for uneven power in different frequency bins (horizontally stripey)
+#    normalize_time - if set to True, then will normalize the dynamic spectrum
+#        to compensate for uneven power in different time bins (vertically stripey)
+# Returns:
+#    the dynamic spectrum as a numpy array
+def get_dynamic_spectrum(filename, normalize_frequency=False, normalize_time=True, outliers_sigma=3):
+    dynamic = np.rot90(fits.open(filename)[0].data)
+    dyn_mean = np.mean(dynamic)
+    dyn_std = np.std(dynamic)
+    for row in range(len(dynamic)):
+        for col in range(len(dynamic[row])):
+            if np.abs(dynamic[row][col]-dyn_mean) > float(outliers_sigma)*dyn_std:
+                dynamic[row][col] = dyn_mean
+    if normalize_frequency:
+        dynamic = arr_normalize_axis(dynamic,'y')
+    if normalize_time:
+        dynamic = arr_normalize_axis(dynamic,'x')
+    return dynamic
 
-"""
-def weight_function(eta,px,py,sigma=1):
-    x,dist = dist_from_parabola(eta,px,py)
-    #print("dist: " + str(dist))
-    dist_from_origin = np.sqrt(px**2+py**2)
-    #ret_y = gaussian(dist,0,
-    ret = dist_from_origin*gaussian(dist,0,sigma)
-    #print("ret: " + str(ret))
-    if ret < (1/np.e**3):
-        #print("ret is None")
-        ret = None
-    return ret
-    #return gaussian(dist,0,sigma)
-"""
+# normalizes array with respect to the given axis, making each row/column
+# have the same mean within a specified region
+# Takes:
+#    arr - the array to be normalized
+#    axis - 'y' or 'x', will specify which axis to take as the chunks
+#        to be normalized
+#    mask - indicates which components of the given axis are priority.
+#        if mask is left None or set to an array of all the same value, then all
+#        points will be considered equal priority. If mask is set to
+#        ones for the first quarter, then zeroes for the rest, then
+#        the array will be normalized such that the means of the rows/columns
+#        will be equal within the region specified by the array. The mask can
+#        also be other numbers; you could specify a list
+#        [1/float(i)**2 for i in range(arr_len)], for instance.
+def arr_normalize_axis(arr,axis=None,mask=None):
+    if axis is None:
+        return arr
+    elif axis is 'y':
+        if mask is None:
+            mask = [1. for i in range(len(arr[0]))]
+        else:
+            for e in mask:
+                e = np.float(e)
+        mean = 0.
+        for row in arr:
+            mean += np.mean(mask*row)
+        mean /= float(len(arr))
+        for row in arr:
+            this_mean = np.mean(mask*row)
+            row *= mean/this_mean
+        return arr
+    elif axis is 'x':
+        return arr_normalize_axis(arr.T,axis='y',mask=mask)
+    else:
+        raise Exception("invalid axis specification.")
+        sys.exit(1)
 
-def weight_function(eta,px,py,sigma=[1,1]):
-    x = closest_point_on_the_parabola(eta,px,py)
-    y = eta*x**2
-    dist_from_origin = np.sqrt(px**2+py**2)
-    ret_y = gaussian(py-y,0,sigma[0])
-    ret_x = gaussian(px-x,0,sigma[1])
-    ret = dist_from_origin*np.sqrt(ret_x*ret_y)
-    if ret < (1/np.e**3):
-        ret = None
-    return ret
-
-def weight_function2(y,x,py,px,sigma):
-    ret_y = gaussian(py-y,0,sigma[0])
-    ret_x = gaussian(px-x,0,sigma[1])
-    ret = np.sqrt(ret_x*ret_y)
-    if ret < (1/np.e**3):
-        ret = None
-    return ret
-
-def weight_function3(eta,orig_y,orig_x,py,px,sigma):
-    x = closest_point_on_the_parabola(eta,px,py)
-    y = eta*x**2
-    dist_from_origin = np.sqrt(orig_x**2+orig_y**2)
-    ret_y = gaussian(py-y,0,sigma[0])
-    ret_x = gaussian(px-x,0,sigma[1])
-    ret = dist_from_origin*np.sqrt(ret_x*ret_y)
-    if ret < (1/np.e**3):
-        ret = None
-    return ret
-
-def crunchy(eta,sec,hand=None,sigma=None):
-    powers = []
-    powers_norm = []
-
-    y_axis = sec.get_y_axis()
-    x_axis = sec.get_x_axis()
-    if sigma==None:
-        sigma = [np.absolute(y_axis[1]-y_axis[0]),
-                 np.absolute(x_axis[1]-x_axis[0])]
-
-    for yi in range(len(y_axis)):
-        y = y_axis[yi]
-        for xi in range(len(x_axis)):
-            x = x_axis[xi]
-            this_weight = weight_function(eta,x,y,sigma)
-            if this_weight is None:
-                powers.append(None)
-                powers_norm.append(None)
-            else:
-                variance = 1/this_weight
-                powers.append(sec.get([yi,xi])/variance)
-                powers_norm.append(1/variance)
-    p = np.nansum(list(filter(None,powers)))
-    pn = np.nansum(list(filter(None,powers_norm)))
-    #print("eta: " + str(eta))
-    #print(p)
-    #print(pn)
-    #print("p/pn: " + str(p/pn))
-    return (eta,p/pn)
-
-def crunchy2(pt_and_sigma,sec,hand=None):
-    pt,sigma = pt_and_sigma
-    py,px = pt
-
-    powers = []
-    powers_norm = []
-
-    y_axis = sec.get_y_axis()
-    x_axis = sec.get_x_axis()
-    px_y = np.absolute(y_axis[1]-y_axis[0])
-    px_x = np.absolute(x_axis[1]-x_axis[0])
-
-    if sigma==None:
-        sigma = [px_y,px_x]
-    if sigma[0]<px_y:
-        sigma = [px_y,sigma[1]]
-    if sigma[1]<px_x:
-        sigma = [sigma[0],px_x]
-
-    for yi in range(len(y_axis)):
-        y = y_axis[yi]
-        for xi in range(len(x_axis)):
-            x = x_axis[xi]
-            this_weight = weight_function2(y,x,py,px,sigma)
-            if this_weight is None:
-                powers.append(None)
-                powers_norm.append(None)
-            else:
-                variance = 1/this_weight
-                powers.append(sec.get([yi,xi])/variance)
-                powers_norm.append(1/variance)
-    p = np.nansum(list(filter(None,powers)))
-    pn = np.nansum(list(filter(None,powers_norm)))
-    return (pt,p/pn)
-
-def crunchy3(offset, eta, sec, sigma=None):
-
-    powers = []
-    powers_norm = []
-
-    y_axis = sec.get_y_axis()
-    x_axis = sec.get_x_axis()
-    px_y = np.absolute(y_axis[1]-y_axis[0])
-    px_x = np.absolute(x_axis[1]-x_axis[0])
-
-    if sigma==None:
-        sigma = [px_y,px_x]
-    if sigma[0]<px_y:
-        sigma = [px_y,sigma[1]]
-    if sigma[1]<px_x:
-        sigma = [sigma[0],px_x]
-
-    for yi in range(len(y_axis)):
-        y = y_axis[yi]
-        for xi in range(len(x_axis)):
-            x = x_axis[xi]
-            y_eff = y + eta*offset**2
-            x_eff = x - offset
-            this_weight = weight_function3(eta,y,x,y_eff,x_eff,sigma)
-            if this_weight is None:
-                powers.append(None)
-                powers_norm.append(None)
-            else:
-                variance = 1/this_weight
-                powers.append(sec.get([yi,xi])/variance)
-                powers_norm.append(1/variance)
-    p = np.nansum(list(filter(None,powers)))
-    pn = np.nansum(list(filter(None,powers_norm)))
-    return (offset,p/pn)
-
-def get_dynamic_spectrum(filename):
-    return np.rot90(fits.open(filename)[0].data)
-
+# returns a secondary spectrum given a dynamic spectrum.
+# Takes:
+#    dyn - a dynamic spectrum numpy 2D array
+#    subtract_secondary_background - whether or not to subtract the background
+#        to improve contrast. Points without signal will have a mean of 0,
+#        the points with meaningful data will have a mean higher than 0.
+#    normalize_frequency - whether to try to get rid of stripeyness in the frequency axis
+#    normalize_time - whether to try to get rid of stripeyness in the time axis
+#    cut_off_bottom - whether to cut off the "mirror image" bottom half of the secondary spectrum
+#    xscale - the multiplicative scale by which to cut down x
+#    yscale - the multiplicative scale by which to cut down y
+# Returns:
+#    a numpy array containing the secondary spectrum
 def get_secondary_spectrum(dyn,subtract_secondary_background=True,normalize_frequency=True,normalize_time=True,cut_off_bottom=True,xscale=1.,yscale=1.):
     dynamic = dyn - np.mean(dyn)
     secondary = np.fft.fftn(dynamic)
@@ -223,16 +165,11 @@ def get_secondary_spectrum(dyn,subtract_secondary_background=True,normalize_freq
     secondary = 10.*np.log10(np.abs(np.fft.fftshift(secondary))**2) # in decibels?
     
     if normalize_frequency:
-        for i in range(len(secondary)):
-            norm_const_f = (np.mean(secondary[i,:len(secondary[i])/4.])
-                            + np.mean(secondary[i,3.*len(secondary[i])/4.:]))/2.
-            secondary[i] = secondary[i]/norm_const_f
-            
+        mask = [1. if i<len(secondary[0])/4. or i>3*len(secondary[0])/4. else 0. for i in range(len(secondary[0]))]
+        secondary = arr_normalize_axis(secondary,'y',mask)
     if normalize_time:
-        for i in range(len(secondary[0])):
-            norm_const_t = np.mean(secondary[:len(secondary)/4.,i])
-            secondary[:,i] = secondary[:,i]/norm_const_t
-    
+        mask = [1. if i<len(secondary)/4. else 0. for i in range(len(secondary))]
+        secondary = arr_normalize_axis(secondary,'x',mask)
     if subtract_secondary_background:
         secondary_background = np.mean(secondary[:len(secondary)/4.][:len(secondary[0])/4.])
         secondary = secondary - secondary_background
@@ -252,11 +189,13 @@ def get_secondary_spectrum(dyn,subtract_secondary_background=True,normalize_freq
     
     return secondary[ymin:ymax,xmin:xmax]
 
+# given a list of files, returns the dynamic and secondary spectra for both
 def get_dyn_and_sec(files):
     dyn = [get_dynamic_spectrum(f) for f in files]
     sec = [get_secondary_spectrum(d) for d in dyn]
     return (dyn,sec)
 
+# sorts a dictionary by key.
 def sort_dict_by_key(dictionary):
     keys = []
     values = []
@@ -265,6 +204,7 @@ def sort_dict_by_key(dictionary):
         values.append(v)
     return (keys,values)
 
+# finds the axes that correspond to the secondary spectrum plot.
 def get_sec_axes(filename):
     """
     Returns lists containing the values of the axis elements.
@@ -291,53 +231,24 @@ def get_sec_axes(filename):
     #print("f: " + str(len(f_temp)))
     return (delay,fringe)
 
-# user specifies a parabola starting at the origin with formula y=ax**2 , 
-# and also a point with x=px and y=py, and this function returns
-# the x-coordinate of the closest point on the parabola.
-def closest_point_on_the_parabola(a,px,py):
-    
-    thingy1 = 2.*a*py
-    thingy2 = np.sqrt(-3+0j)
-    thingy3 = 2**(1/3.)
-    thingy4 = 2**(2/3.)
-    thingy = (-108.*a**4*px + np.sqrt(11664.*a**8*px**2 - 864.*a**6*(-1 + thingy1)**3 + 0j))**(1/3.)
-    Aone = (thingy3*(-1. + thingy1))
-    Atwo = thingy
-    Athree = thingy
-    Afour = (6.*thingy3*a**2)
-    Bone = ((1. + thingy2)*(-1. + thingy1))
-    Btwo = (thingy4*thingy)
-    Bthree = ((1. - thingy2)*thingy)
-    Bfour = (12.*thingy3*a**2)
-    Cone = (1. - thingy2)*(-1 + thingy1)
-    Ctwo = thingy4*thingy
-    Cthree = (1. + thingy2)*thingy
-    Cfour = 12.*thingy3*a**2
-    
-    A = -np.real(Aone/Atwo + Athree/Afour)
-    B =  np.real(Bone/Btwo + Bthree/Bfour)
-    C =  np.real(Cone/Ctwo + Cthree/Cfour)
-    
-    solns = [A,B,C]
-    solns_temp = []
-    for soln in solns:
-        solns_temp.append(np.abs(soln-px))
-    
-    val, idx = min((val, idx) for (idx, val) in enumerate(solns_temp))
-    return solns[idx]
-
-def dist_from_parabola(a,px,py):
-    X = closest_point_on_the_parabola(a,px,py)
-    return (X,np.sqrt(a**2*X**4-2.*a*X**2*py+py**2+X**2-2.*px*X+px**2))
-
 
 """
 EVERYTHING IS INDEXED FIRST WITH RESPECT TO Y, THEN WITH RESPECT TO X
 EVERYTHING IS INDEXED FIRST WITH RESPECT TO Y, THEN WITH RESPECT TO X
 EVERYTHING IS INDEXED FIRST WITH RESPECT TO Y, THEN WITH RESPECT TO X
 """
-
-
+# here's a pretty schweet class that keeps track of both a numpy array and its
+# associated axes. It looks long, but it's actually really simple - .data contains
+# the 2D numpy array with the data, and .x_axis and .y_axis hold the x and y axes
+# respectively (.axes holds both as a tuple). It's useful because it does type checking
+# and stuff for you, so instead of lugging around variables like dyn_data dyn_xaxis
+# dyn_yaxis all the way through your program, you can just have an Indexed2D object
+# that holds all the information for you, guaranteed to work in imshow or something.
+#
+# oh, another cool thing about this - you can access the values in the Indexed2D by
+# the value of its axes. For instance, if you have an array that has 200 elements from
+# -1 to 1 on the x axis, and 100 elements from 0 to 1 on the y axis, you can access the
+# value of a point at y=-0.32 and x=0.57 by saying my_Indexed2D[-0.32,0.57]
 class Indexed2D:
     def __init__(self,data=None,axes=None,dtype=float):
         self._is_data_set = False
@@ -477,3 +388,247 @@ class Indexed2D:
     
     def get_y_axis(self):
         return self.y_axis
+
+
+# this class constructs, contains, and displays secondary spectra.
+class Secondary():
+    # initialize me with a filename
+    def __init__(self,filename,hand=None):
+        data = get_secondary_spectrum(get_dynamic_spectrum(filename))
+        axes = get_sec_axes(filename)
+        #print(type(axes[0]),type(axes[1]))
+        self.sec = Indexed2D(data=data,axes=axes)
+        self.hand=hand
+        self.made_1D=False
+        self.parabola_power = {}
+        self.observation_name = os.path.basename(filename)
+        self.band = self.observation_name.split("_")[1].split("M")[0]
+    
+    # the secondary object can be accessed like a list - sec[5,5] will return
+    def __getitem__(self,value):
+        return self.sec[value]
+    
+    def get(self,value):
+        return self.sec.get_data().item(tuple(value))
+    
+    # gives the y axis of the secondary spectrum
+    def get_y_axis(self):
+        return self.sec.y_axis
+    
+    # gives the x axis of the secondary spectrum
+    def get_x_axis(self):
+        return self.sec.x_axis
+    
+    # crops the secondary spectrum by y_scale and x_scale percent
+    def crop_percent(self,y_scale,x_scale):
+        y_scale = float(y_scale)
+        x_scale = float(x_scale)
+        if y_scale<0 or x_scale<0 or y_scale>1 or x_scale>1:
+            raise ValueError('x_scale and y_scale must be between 0 and 1.')
+        y_max = max(self.sec.get_y_axis())
+        x_max = max(self.sec.get_x_axis())
+        self.sec = self.sec[y_max*y_scale:,-x_max*x_scale:x_max*x_scale]
+        return
+    
+    # crops the secondary spectrum to the tuples specified by x_lim
+    # and y_lim - i.e. if the secondary spectrum goes from -10 to 10
+    # on the x axis and 0 to 5 on the y axis, you couls specify
+    # crop( (-2.5,2.5) , (0,3) ) to crop the secondary spectrum
+    # to those ranges.
+    def crop(self,y_lim,x_lim):
+        self.sec = self.sec[float(y_lim[0]):float(y_lim[1]),float(x_lim[0]):float(x_lim[1])]
+    
+    # gives sec as a numpy 2D array
+    def get_sec(self):
+        return self.sec.get_data()
+    
+    # plots the secondary spectrum to the current figure in matplotlib
+    def show_sec(self):
+        show_image(self.get_sec(),self.get_y_axis(),self.get_x_axis())
+        if self.made_1D:
+            self.overplot_parabolas([min(self.etas),max(self.etas)])
+        plt.title(self.observation_name)
+        plt.xlabel('delay')
+        plt.ylabel('fringe frequency')
+        return
+    
+    # plots parabolas over the secondary spectrum.
+    # Takes:
+    #    etas - a list of the curvatures of parabolas desired
+    #    offsets - a list of the y-offsets desired for the parabolas
+    # Returns:
+    #    nothing, but plots the parabolas to the current matplotlib figure.
+    def overplot_parabolas(self, etas, offsets = [0.]):
+        for eta in etas:
+            for offset in offsets:
+                eta = float(eta)
+                axis_x = self.get_x_axis()
+                plot_x = [x+offset for x in axis_x]
+                axis_y = self.get_y_axis()
+                parab = []
+                for x in axis_x:
+                    y = eta*x**2 - eta*offset**2
+                    parab.append(y)
+                plt.plot(plot_x, parab, 'b-')
+                plt.xlim((min(axis_x),max(axis_x)))
+                plt.ylim((min(axis_y),max(axis_y)))
+    
+    # shows how much power is present in each eta value.
+    # Requires make_1D_by_quadratic to have been run, and simply plots
+    # the results from it to the current figure in matplotlib.
+    def show_power_vs_eta(self,weird=False):
+        if not self.made_1D:
+            print("make_1D_by_quadratic has not been run yet")
+            return
+
+        if not weird:
+            plt.plot(self.etas,self.powers)
+            plt.xlabel("eta")
+            plt.ylabel("Power(dB), arbitrary scaling")
+            plt.title("Power vs eta, " + self.observation_name)
+            #self.overplot_parabolas([min(sec.etas),max(sec.etas)])
+            return
+        else:
+            fig = plt.figure()
+            fig.subplots_adjust(bottom=0.2)
+            plt.plot([1/eta**2 for eta in self.etas],self.powers)
+            
+            x_axis_points = np.linspace(1/max(self.etas)**2,1/min(self.etas)**2,10)
+            x_axis = [round(1/np.sqrt(x),4) for x in x_axis_points]
+            plt.xticks(x_axis_points,x_axis,rotation=90)
+            plt.xlabel("eta")
+            plt.ylabel("Power(dB), arbitrary scaling")
+            plt.title("Power vs eta, " + self.observation_name)
+            #self.overplot_parabolas([min(self.etas),max(self.etas)])
+            return
+    
+    def __give_eta_list(self,eta_range,num_etas,decimal_places=4):
+        if num_etas is not 1:
+            x_max = np.sqrt(1/min(eta_range))
+            x_min = np.sqrt(1/max(eta_range))
+            return [1/x**2 for x in np.linspace(x_min,x_max,num_etas)]
+        else:
+            return [np.average(eta_range)]
+    
+    # finds the eta values of the parabolas in the secondary spectrum.
+    # goes through the range of etas given to it, and determines the total power integrated
+    # across the parabola defined by each eta. Since the parabolas are blurred out, we expect
+    # to see a gaussian distribution in eta vs power.
+    # Takes:
+    #    eta_range - a tuple containing the minimum and maximum etas to explore
+    #    num_etas - the number of etas to explore over the above range
+    #    num_threads - the number of simultaneous processes to be used for multiprocessing
+    #    sigma - idfk i forget, just leave it alone probably
+    # Returns:
+    #    a list of powers and their corresponding eta values. Returned in the form (etas,values)
+    #    where both etas and values are lists.
+    def make_1D_by_quadratic(self,eta_range,num_etas,num_threads=mp.cpu_count()-1,sigma=None):
+        if num_threads == 0:
+            num_threads = 1
+        print("num threads: " + str(num_threads))
+        print(self.observation_name)
+        
+        etas = self.__give_eta_list(eta_range,num_etas)
+        
+        pool = mp.Pool(processes=num_threads)
+        output = pool.map(partial(crunchy, sec=self, hand=self.hand, sigma=sigma), etas)
+        
+        powers = {}
+        for item in output:
+            powers[item[0]] = item[1]
+        
+        ret = sort_dict_by_key(powers)
+        self.made_1D = True
+        self.etas = ret[0]
+        self.powers = ret[1]
+        return ret
+    
+    ###### not fully debugged, use with caution ######
+    #
+    # finds the power along a parabola as a function of x. For instance, if all of the power in
+    # a parabola is on the left side of the parabola and there is almost no power on the right side,
+    # this function will show large values for x<0 and small values for x>0.
+    def power_along_parabola(self,eta,num_arclets = 100,num_threads=mp.cpu_count()-1,sigma_px=3):
+        if num_threads == 0:
+            num_threads = 1
+        print("num threads: " + str(num_threads))
+        eta = float(eta)
+        max_x = np.sqrt(max(self.sec.get_y_axis())/eta)
+        max_possible_x = np.absolute(max(self.sec.get_x_axis()))
+        if max_x>max_possible_x:
+            max_x = max_possible_x
+        
+        y_axis = self.get_y_axis()
+        x_axis = self.get_x_axis()
+        
+        px_y = np.absolute(y_axis[1]-y_axis[0])
+        px_x = np.absolute(x_axis[1]-x_axis[0])
+        
+        def dist_bw_pts(pt1,pt2):
+            y1 = pt1[0]
+            y2 = pt2[0]
+            x1 = pt1[1]
+            x2 = pt2[1]
+            return np.sqrt( np.absolute(y1-y2)**2 + np.absolute(x1-x2)**2 )
+
+        
+        temp = [max_x*x**2 for x in np.linspace(0,1,num_arclets/2)]
+        x_list = [-x for x in list(reversed(temp))[:-1]]
+        x_list.extend(temp)
+        y_list = [eta*x**2 for x in x_list]
+        pts = [(y_list[i],x_list[i]) for i in range(len(x_list))]
+        
+        sigmas = []
+        for i in range(len(pts)):
+            if i == 0:
+                sigmas.append( [np.absolute(pts[1][0]-pts[0][0]),np.absolute(pts[1][1]-pts[0][1])] )
+            elif i == len(pts)-1:
+                sigmas.append( [np.absolute(pts[-1][0]-pts[-2][0]),np.absolute(pts[-1][1]-pts[-2][1])] )
+            else:
+                sigma_y = px_y*sigma_px
+                sigma_x = px_x*sigma_px
+                sigmas.append( [sigma_y,sigma_x] )
+        
+        
+        pts_and_sigmas = []
+        for i in range(len(sigmas)):
+            pts_and_sigmas.append( (pts[i],sigmas[i]) )
+        
+        pool = mp.Pool(processes=num_threads)
+        output = pool.map(partial(crunchy2, sec=self, hand=self.hand), pts_and_sigmas)
+        
+        powers = {}
+        for item in output:
+            powers[item[0]] = item[1]
+        
+        self.parabola_power[eta] = powers
+        return powers
+        
+    ####### not fully debugged, use with caution #######
+    #
+    # finds and returns the width of the parabola as a function of x or something.
+    # IDK I'm kind of in a rush right now, just contact me somehow if you really want
+    # to use this lol
+    def parabola_width(self,eta,max_width,num_offsets,num_threads=mp.cpu_count()-1):
+        if num_threads == 0:
+            num_threads = 1
+        print("num threads: " + str(num_threads))
+        print(self.observation_name)
+        
+        temp = [max_width*np.sqrt(x) for x in np.linspace(0,1,num_offsets/2)]
+        offsets = [-x for x in list(reversed(temp))[:-1]]
+        offsets.extend(temp)
+        
+        print(offsets)
+        
+        pool = mp.Pool(processes=num_threads)
+        output = pool.map(partial(crunchy3, sec=self, eta=eta), offsets)
+        
+        powers = {}
+        for item in output:
+            powers[item[0]] = item[1]
+        
+        ret = sort_dict_by_key(powers)
+        self.offsets = ret[0]
+        self.offset_powers = ret[1]
+        return ret
