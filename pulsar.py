@@ -31,10 +31,17 @@ def get_file_list(d):
 # Returns:
 #    Plots the image, returns nothing. Note the show() call must be made manually.
 def show_image(showme, axis_y=None, axis_x=None):
-    if axis_x is None:
-        axis_x = [i for i in range(len(showme[0]))]
-    if axis_y is None:
-        axis_y = [i for i in range(len(showme))]
+    try:
+        if axis_y == None:
+            axis_y = showme.y_axis
+        if axis_x == None:
+            axis_x = showme.x_axis
+        showme = showme.data
+    except Exception:
+        if axis_x == None:
+            axis_x = [i for i in range(len(showme[0]))]
+        if axis_y == None:
+            axis_y = [i for i in range(len(showme))]
     (x_min,x_max) = (min(axis_x),max(axis_x))
     (y_min,y_max) = (min(axis_y),max(axis_y))
     plt.figure()
@@ -94,18 +101,21 @@ def overplot_parabola(sec, a, hand=None):
 #        to compensate for uneven power in different time bins (vertically stripey)
 # Returns:
 #    the dynamic spectrum as a numpy array
-def get_dynamic_spectrum(filename, normalize_frequency=False, normalize_time=True, outliers_sigma=3):
-    dynamic = np.rot90(fits.open(filename)[0].data)
-    dyn_mean = np.mean(dynamic)
-    dyn_std = np.std(dynamic)
-    for row in range(len(dynamic)):
-        for col in range(len(dynamic[row])):
-            if np.abs(dynamic[row][col]-dyn_mean) > float(outliers_sigma)*dyn_std:
-                dynamic[row][col] = dyn_mean
+def get_dynamic_spectrum(filename, normalize_frequency=False, normalize_time=True, outliers_sigma=5,rotate=False):
+    dynamic = fits.open(filename)[0].data
+    if rotate:
+        dynamic = np.rot90(dynamic)
     if normalize_frequency:
         dynamic = arr_normalize_axis(dynamic,'y')
     if normalize_time:
         dynamic = arr_normalize_axis(dynamic,'x')
+    if normalize_frequency or normalize_time:
+        dyn_mean = np.mean(dynamic)
+        dyn_std = np.std(dynamic)
+        for row in range(len(dynamic)):
+            for col in range(len(dynamic[row])):
+                if np.abs(dynamic[row][col]-dyn_mean) > float(outliers_sigma)*dyn_std:
+                    dynamic[row][col] = dyn_mean
     return dynamic
 
 # normalizes array with respect to the given axis, making each row/column
@@ -211,13 +221,15 @@ def get_sec_axes(filename):
     Parameters: takes a list of filenames pointing to the relevant FITS files.
     Returns: a list of tuples ([conjugate frequency axis values],[conjugate time axis values])
     """
+    
+    
 
     hdulist = fits.open(filename)
     
     t_int = hdulist[0].header["T_INT"] #Gets time interval (delta t) from header
     nchunks = hdulist[0].header["NCHUNKS"] #number of time subintegrations
     BW = hdulist[0].header["BW"] #Gets bandwidth from header 
-    nchans = hdulist[0].header["NCHANS"] #number of channels 
+    nchans = hdulist[0].header["NCHANS"] #number of channels
     
     nyq_t = 1000. / (2. * t_int) #nyquist frequency for the delay axis of the secondary spectrum
     nyq_f = nchans / (2. * BW) #nyquist frequency for the fringe frequency axis of the secondary spectrum
@@ -270,27 +282,59 @@ class Indexed2D:
         x = tup[1]
         y_index = self.__get_y_index(y)
         x_index = self.__get_x_index(x)
-        return Indexed2D(data=self.data[y_index,x_index],axes=(self.y_axis[y_index],self.x_axis[x_index]))
+        y_axis = self.y_axis[y_index]
+        x_axis = self.x_axis[x_index]
+        y_axis = y_axis if type(y_axis) == list else [y_axis]
+        x_axis = x_axis if type(x_axis) == list else [x_axis]
+        d = self.data[y_index,x_index]
+        if len(np.shape(d)) <= 1:
+            return d
+        else:
+            return Indexed2D(data=self.data[y_index,x_index],axes=(y_axis,x_axis))
+    
+    def __setitem__(self,tup,item):
+        yval = tup[0]
+        xval = tup[1]
+        y_index = self.__get_y_index(yval)
+        x_index = self.__get_x_index(xval)
+        y_index = y_index if type(y_index) == list else [y_index]
+        x_index = x_index if type(x_index) == list else [x_index]
+        if len(np.shape(item)) == 0:
+            item = np.array([np.array([item])])
+        
+        for y in y_index:
+            for x in x_index:
+                item_y = y - y_index[0]
+                item_x = x - x_index[0]
+                self.data[y,x] = item[item_y,item_x]
+    
+    def shape(self):
+        y_shape = len(self.data)
+        x_shape = len(self.data[0])
+        return (y_shape, x_shape)
     
     def __get_y_index(self,value):
         if type(value)==slice:
-            if value.start is not None:
+            if value.start != None:
                 if value.start<min(self.y_axis) or value.start>max(self.y_axis):
                     raise IndexError('y axis index out of bounds: ' + str(value.start))
                 start_index = list(np.absolute([p - value.start for p in self.y_axis]))
                 start_index = start_index.index(min(start_index))
             else:
                 start_index = 0
-            if value.stop is not None:
+            if value.stop != None:
                 if value.stop<min(self.y_axis) or value.stop>max(self.y_axis):
                     raise IndexError('y axis index out of bounds: ' + str(value.stop))
                 stop_index = list(np.absolute([p - value.stop for p in self.y_axis]))
                 stop_index = stop_index.index(min(stop_index))
             else:
                 stop_index = len(self.y_axis)-1
-            return slice(start_index,stop_index+1)
+            if start_index<stop_index+1:
+                return slice(start_index,stop_index+1)
+            else:
+                return slice(stop_index+1,start_index)
         else:
-            index = [p - value for p in self.y_axis]
+            index = [abs(p - value) for p in self.y_axis]
             index = index.index(min(index))
             return index
     
@@ -310,15 +354,20 @@ class Indexed2D:
                 stop_index = stop_index.index(min(stop_index))
             else:
                 stop_index = len(self.x_axis)-1
-            return slice(start_index,stop_index+1)
+            if start_index<stop_index+1:
+                return slice(start_index,stop_index+1)
+            else:
+                return slice(stop_index+1,start_index)
         else:
-            index = [p - value for p in self.x_axis]
+            index = [abs(p - value) for p in self.x_axis]
             index = index.index(min(index))
             return index
     
     def set_data(self,data,dtype=float):
         if type(data) is not list and type(data) is not np.ndarray:
             raise TypeError('Data does not have the right type.')
+        if len(np.shape(data)) == 1:
+            data = np.array([data])
         for d in data:
             if len(d)!=len(data[0]):
                 raise IndexError('Data must be rectangular in shape.')
@@ -330,7 +379,7 @@ class Indexed2D:
                     try:
                         d[i] = dtype(d[i])
                     except Exception as e:
-                        print('your data could not be casted to '+str(dtype)+': ')
+                        print('your data, type '+str(type(d[i]))+' could not be casted to '+str(dtype)+': ')
                         raise e
         if self._are_axes_set:
             y_axis_matching = len(data) == len(self.y_axis)
@@ -393,8 +442,9 @@ class Indexed2D:
 # this class constructs, contains, and displays secondary spectra.
 class Secondary():
     # initialize me with a filename
-    def __init__(self,filename,hand=None):
-        data = get_secondary_spectrum(get_dynamic_spectrum(filename))
+    def __init__(self,filename,hand=None,rotate=False):
+        self.dynamic = get_dynamic_spectrum(filename,rotate=rotate)
+        data = get_secondary_spectrum(self.dynamic)
         axes = get_sec_axes(filename)
         #print(type(axes[0]),type(axes[1]))
         self.sec = Indexed2D(data=data,axes=axes)
@@ -410,6 +460,23 @@ class Secondary():
     
     def get(self,value):
         return self.sec.get_data().item(tuple(value))
+    
+    def linearize(self,nones=False):
+        y_axis = self.get_y_axis()
+        x_axis = self.get_x_axis()
+        new_data = Indexed2D()
+        y_sqrt = np.linspace(max(np.sqrt(y_axis)),0.,num=len(y_axis))
+        new_data.set_axes((y_sqrt,x_axis))
+        new_data.set_data(np.zeros((len(y_axis),len(x_axis))))
+        for y in y_axis:
+            for x in x_axis:
+                new_data[np.sqrt(y),x] = self[y,x]
+        if nones:
+            for y in y_axis:
+                for x in x_axis:
+                    if new_data[y,x] == 0:
+                        new_data[y,x] = None
+        self.sec = new_data
     
     # gives the y axis of the secondary spectrum
     def get_y_axis(self):
@@ -444,7 +511,7 @@ class Secondary():
     
     # plots the secondary spectrum to the current figure in matplotlib
     def show_sec(self):
-        show_image(self.get_sec(),self.get_y_axis(),self.get_x_axis())
+        show_image(self.sec)
         if self.made_1D:
             self.overplot_parabolas([min(self.etas),max(self.etas)])
         plt.title(self.observation_name)
